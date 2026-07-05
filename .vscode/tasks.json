@@ -1,0 +1,71 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "TechMind: Build Extension (.vsix)",
+      "type": "shell",
+      "command": "node",
+      "args": ["build.js"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": ["$tsc"],
+      "detail": "Compiles TypeScript and packages techmind-studio-1.0.0.vsix. No network access used."
+    },
+    {
+      "label": "TechMind: Compile TypeScript Only",
+      "type": "shell",
+      "command": "node",
+      "args": ["node_modules/typescript/lib/tsc.js", "-p", "./"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": ["$tsc"],
+      "detail": "Compiles .ts source to out/*.js without packaging the .vsix."
+    },
+    {
+      "label": "TechMind: Package .vsix Only",
+      "type": "shell",
+      "command": "node",
+      "args": ["make-vsix.js"],
+      "group": "build",
+      "dependsOn": "TechMind: Compile TypeScript Only",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "Zips the already-compiled out/ folder into a .vsix. Run 'Compile TypeScript Only' first if out/ doesn't exist yet."
+    },
+    {
+      "label": "TechMind: Clean Build Output",
+      "type": "shell",
+      "command": "node",
+      "args": ["-e", "const fs=require('fs'); for (const p of ['out','techmind-studio-1.0.0.vsix']) { if (fs.existsSync(p)) fs.rmSync(p, {recursive:true, force:true}); } console.log('Cleaned.');"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "Removes out/ and the previous .vsix so the next build starts fresh."
+    }
+  ]
+}
