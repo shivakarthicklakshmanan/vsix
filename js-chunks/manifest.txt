@@ -1,0 +1,21 @@
+TechMind — TypeScript compiler files split into 500 KB (512000-byte) chunks
+============================================================================
+Source dir: techmind-offline-deps/node_modules/typescript/lib/
+
+ORIGINAL FILES (verify a reassembled file by matching its SHA256 to these):
+
+  _tsc.js
+    size   : 6,213,092 bytes
+    chunks : 13   (_tsc/_tsc.js.part000 .. part012)
+    SHA256 : E8F349EABD48486BDB2BF9DC1A00C89D58297270C54B745838879E2859194419
+
+  typescript.js
+    size   : 9,112,572 bytes
+    chunks : 18   (typescript/typescript.js.part000 .. part017)
+    SHA256 : 3AE902C92CC44DACE175C0E69E13A4B0899F6983C6121D76B9AB8DD5795E7675
+
+Chunk size : 512000 bytes each (last chunk smaller).
+Reassemble : run restitch.ps1 (Windows) or restitch.sh (bash), then compare
+             the printed SHA256 against the values above.
+Note       : chunks sort correctly by name (zero-padded part000..partNNN),
+             so concatenation in filename order restores the exact bytes.

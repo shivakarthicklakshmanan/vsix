@@ -1,0 +1,4 @@
+# Treat all chunk parts as binary so Git never rewrites line endings.
+# This guarantees the reassembled files are byte-for-byte identical to the
+# originals (SHA256 in manifest.txt) on any platform.
+*.part* -text binary
