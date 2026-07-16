@@ -13,10 +13,23 @@ import {
   callWithFallback,
   SYSTEM_CONTEXT,
 } from "./llmRegistry";
+import { SessionManager } from "./sessionManager";
 
 interface AttachedFile {
   name: string;
   content: string;
+}
+
+/** Flatten a message content (string or multimodal parts) to plain text for display. */
+function contentToText(content: any): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((p) => p && p.type === "text" && typeof p.text === "string")
+      .map((p) => p.text)
+      .join("\n");
+  }
+  return "";
 }
 
 interface AttachedImage {
@@ -27,11 +40,16 @@ interface AttachedImage {
 
 export class AgentPanel {
   public static currentPanel: AgentPanel | undefined;
+  // Session wiring — set once during activate().
+  public static sessionManager: SessionManager | undefined;
+  public static refreshSessions: (() => void) | undefined;
+
   private readonly panel: vscode.WebviewPanel;
   private readonly extensionUri: vscode.Uri;
   private disposables: vscode.Disposable[] = [];
 
   private history: ChatMessage[] = [];
+  private sessionId: string = "";
   private attachedFiles: AttachedFile[] = [];
   private attachedImages: AttachedImage[] = [];
   private getEnabledModels: () => Set<string>;
@@ -99,6 +117,32 @@ export class AgentPanel {
     );
 
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+
+    // Load the active session's history into the panel.
+    void this.loadActiveSession();
+  }
+
+  /** Load the active session's stored history into this panel and render it. */
+  public async loadActiveSession(): Promise<void> {
+    const sm = AgentPanel.sessionManager;
+    if (!sm) return;
+    this.sessionId = await sm.ensureActive();
+    this.history = sm.getMessages(this.sessionId);
+    this.attachedFiles = [];
+    this.attachedImages = [];
+    this.postToWebview({ type: "contextCleared" });
+    this.postToWebview({
+      type: "loadHistory",
+      messages: this.history.map((m) => ({ role: m.role, content: contentToText(m.content) })),
+    });
+  }
+
+  /** Persist the current history back to the active session (with housekeeping). */
+  private async persistActiveSession(): Promise<void> {
+    const sm = AgentPanel.sessionManager;
+    if (!sm || !this.sessionId) return;
+    await sm.saveMessages(this.sessionId, this.history);
+    AgentPanel.refreshSessions?.();
   }
 
   public attachFile(name: string, content: string) {
@@ -260,6 +304,7 @@ export class AgentPanel {
     // Store clean turn (without guided-mode wrapper) for memory
     this.history.push({ role: "user", content: userText });
     this.history.push({ role: "assistant", content: result.text });
+    void this.persistActiveSession();
 
     this.postToWebview({
       type: "assistantMessage",
@@ -566,6 +611,14 @@ export class AgentPanel {
       case 'contextCleared':
         attachedBar.style.display = 'none';
         attachedBar.textContent = '';
+        break;
+      case 'loadHistory':
+        chat.innerHTML = '';
+        msgCounter = 0;
+        routingBanner.style.display = 'none';
+        (msg.messages || []).forEach(function (m) {
+          addMessage(m.role === 'user' ? 'user' : 'assistant', m.content, null);
+        });
         break;
     }
   });

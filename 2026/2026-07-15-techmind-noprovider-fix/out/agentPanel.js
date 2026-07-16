@@ -43,6 +43,18 @@ exports.AgentPanel = void 0;
 const vscode = __importStar(require("vscode"));
 const path = __importStar(require("path"));
 const llmRegistry_1 = require("./llmRegistry");
+/** Flatten a message content (string or multimodal parts) to plain text for display. */
+function contentToText(content) {
+    if (typeof content === "string")
+        return content;
+    if (Array.isArray(content)) {
+        return content
+            .filter((p) => p && p.type === "text" && typeof p.text === "string")
+            .map((p) => p.text)
+            .join("\n");
+    }
+    return "";
+}
 class AgentPanel {
     static createOrShow(extensionUri, getEnabledModels) {
         const column = vscode.ViewColumn.Two;
@@ -60,6 +72,7 @@ class AgentPanel {
     constructor(panel, extensionUri, getEnabledModels) {
         this.disposables = [];
         this.history = [];
+        this.sessionId = "";
         this.attachedFiles = [];
         this.attachedImages = []; // { name, base64, mimeType }
         this.panel = panel;
@@ -91,6 +104,32 @@ class AgentPanel {
             }
         }, null, this.disposables);
         this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+        // Load the active session's history into the panel.
+        void this.loadActiveSession();
+    }
+    /** Load the active session's stored history into this panel and render it. */
+    async loadActiveSession() {
+        const sm = AgentPanel.sessionManager;
+        if (!sm)
+            return;
+        this.sessionId = await sm.ensureActive();
+        this.history = sm.getMessages(this.sessionId);
+        this.attachedFiles = [];
+        this.attachedImages = [];
+        this.postToWebview({ type: "contextCleared" });
+        this.postToWebview({
+            type: "loadHistory",
+            messages: this.history.map((m) => ({ role: m.role, content: contentToText(m.content) })),
+        });
+    }
+    /** Persist the current history back to the active session (with housekeeping). */
+    async persistActiveSession() {
+        const sm = AgentPanel.sessionManager;
+        if (!sm || !this.sessionId)
+            return;
+        await sm.saveMessages(this.sessionId, this.history);
+        if (AgentPanel.refreshSessions)
+            AgentPanel.refreshSessions();
     }
     attachFile(name, content) {
         // Replace if already attached
@@ -251,6 +290,7 @@ class AgentPanel {
         // Store clean turn (without guided-mode wrapper) for memory
         this.history.push({ role: "user", content: userText });
         this.history.push({ role: "assistant", content: result.text });
+        void this.persistActiveSession();
         this.postToWebview({
             type: "assistantMessage",
             text: result.text,
@@ -552,6 +592,14 @@ class AgentPanel {
       case 'contextCleared':
         attachedBar.style.display = 'none';
         attachedBar.textContent = '';
+        break;
+      case 'loadHistory':
+        chat.innerHTML = '';
+        msgCounter = 0;
+        routingBanner.style.display = 'none';
+        (msg.messages || []).forEach(function (m) {
+          addMessage(m.role === 'user' ? 'user' : 'assistant', m.content, null);
+        });
         break;
     }
   });

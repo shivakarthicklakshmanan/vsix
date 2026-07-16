@@ -38,7 +38,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ModelsProvider = exports.ModelItem = exports.ToolsProvider = exports.ToolItem = exports.WorkflowsProvider = exports.WorkflowItem = void 0;
+exports.SessionsProvider = exports.SessionItem = exports.ModelsProvider = exports.ModelItem = exports.ToolsProvider = exports.ToolItem = exports.WorkflowsProvider = exports.WorkflowItem = void 0;
 const vscode = __importStar(require("vscode"));
 const workflows_1 = require("./workflows");
 const llmRegistry_1 = require("./llmRegistry");
@@ -167,4 +167,52 @@ class ModelsProvider {
     }
 }
 exports.ModelsProvider = ModelsProvider;
+// ─────────────────────────────── Sessions ───────────────────────────────
+function relTime(ts) {
+    const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+    if (s < 60)
+        return "just now";
+    const m = Math.floor(s / 60);
+    if (m < 60)
+        return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24)
+        return `${h}h ago`;
+    const d = Math.floor(h / 24);
+    return `${d}d ago`;
+}
+class SessionItem extends vscode.TreeItem {
+    constructor(meta, active) {
+        super(meta.title || "Untitled Session", vscode.TreeItemCollapsibleState.None);
+        this.meta = meta;
+        this.description = `${active ? "● " : ""}${meta.messageCount} msg · ${relTime(meta.updatedAt)}`;
+        this.tooltip = `${meta.title}\nUpdated ${new Date(meta.updatedAt).toLocaleString()}\n${meta.messageCount} messages`;
+        this.iconPath = new vscode.ThemeIcon(active ? "comment-discussion" : "comment");
+        this.contextValue = "sessionItem";
+        this.command = {
+            command: "techmind.switchSession",
+            title: "Open Session",
+            arguments: [meta.id],
+        };
+    }
+}
+exports.SessionItem = SessionItem;
+class SessionsProvider {
+    constructor(sessions) {
+        this.sessions = sessions;
+        this._onDidChangeTreeData = new vscode.EventEmitter();
+        this.onDidChangeTreeData = this._onDidChangeTreeData.event;
+    }
+    refresh() {
+        this._onDidChangeTreeData.fire();
+    }
+    getTreeItem(element) {
+        return element;
+    }
+    getChildren() {
+        const activeId = this.sessions.getActiveId();
+        return this.sessions.list().map((m) => new SessionItem(m, m.id === activeId));
+    }
+}
+exports.SessionsProvider = SessionsProvider;
 //# sourceMappingURL=sidebarProviders.js.map

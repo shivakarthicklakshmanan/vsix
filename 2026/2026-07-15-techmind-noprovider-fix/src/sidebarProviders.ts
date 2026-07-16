@@ -7,6 +7,7 @@
 import * as vscode from "vscode";
 import { WORKFLOWS, Workflow } from "./workflows";
 import { LLM_REGISTRY } from "./llmRegistry";
+import { SessionManager, SessionMeta } from "./sessionManager";
 
 // ───────────────────────────── Workflows ─────────────────────────────
 
@@ -148,5 +149,53 @@ export class ModelsProvider implements vscode.TreeDataProvider<ModelItem> {
     return LLM_REGISTRY.map(
       (m) => new ModelItem(m.name, this.enabledSet.has(m.name), m.strengths)
     );
+  }
+}
+
+// ─────────────────────────────── Sessions ───────────────────────────────
+
+function relTime(ts: number): string {
+  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (s < 60) return "just now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
+}
+
+export class SessionItem extends vscode.TreeItem {
+  constructor(public readonly meta: SessionMeta, active: boolean) {
+    super(meta.title || "Untitled Session", vscode.TreeItemCollapsibleState.None);
+    this.description = `${active ? "● " : ""}${meta.messageCount} msg · ${relTime(meta.updatedAt)}`;
+    this.tooltip = `${meta.title}\nUpdated ${new Date(meta.updatedAt).toLocaleString()}\n${meta.messageCount} messages`;
+    this.iconPath = new vscode.ThemeIcon(active ? "comment-discussion" : "comment");
+    this.contextValue = "sessionItem";
+    this.command = {
+      command: "techmind.switchSession",
+      title: "Open Session",
+      arguments: [meta.id],
+    };
+  }
+}
+
+export class SessionsProvider implements vscode.TreeDataProvider<SessionItem> {
+  private _onDidChangeTreeData = new vscode.EventEmitter<void>();
+  readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
+
+  constructor(private sessions: SessionManager) {}
+
+  refresh(): void {
+    this._onDidChangeTreeData.fire();
+  }
+
+  getTreeItem(element: SessionItem): vscode.TreeItem {
+    return element;
+  }
+
+  getChildren(): SessionItem[] {
+    const activeId = this.sessions.getActiveId();
+    return this.sessions.list().map((m) => new SessionItem(m, m.id === activeId));
   }
 }

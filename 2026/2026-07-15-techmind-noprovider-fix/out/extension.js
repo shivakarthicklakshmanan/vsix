@@ -45,18 +45,70 @@ const vscode = __importStar(require("vscode"));
 const sidebarProviders_1 = require("./sidebarProviders");
 const agentPanel_1 = require("./agentPanel");
 const llmRegistry_1 = require("./llmRegistry");
+const sessionManager_1 = require("./sessionManager");
 function activate(context) {
     // ── Models state (enabled/disabled) ──
     const initiallyEnabled = new Set(llmRegistry_1.LLM_REGISTRY.map((m) => m.name));
     const modelsProvider = new sidebarProviders_1.ModelsProvider(initiallyEnabled);
-    // ── Register TreeViews (LEFT side: Workflows, Tools, Models) ──
+    // ── Sessions (persistent chat sessions, stored locally in globalState) ──
+    const sessionManager = new sessionManager_1.SessionManager(context.globalState);
+    const sessionsProvider = new sidebarProviders_1.SessionsProvider(sessionManager);
+    agentPanel_1.AgentPanel.sessionManager = sessionManager;
+    agentPanel_1.AgentPanel.refreshSessions = () => sessionsProvider.refresh();
+    // ── Register TreeViews (LEFT side: Sessions, Workflows, Tools, Models) ──
     const workflowsProvider = new sidebarProviders_1.WorkflowsProvider();
     const toolsProvider = new sidebarProviders_1.ToolsProvider();
-    context.subscriptions.push(vscode.window.registerTreeDataProvider("techmind.workflows", workflowsProvider), vscode.window.registerTreeDataProvider("techmind.tools", toolsProvider), vscode.window.registerTreeDataProvider("techmind.models", modelsProvider));
+    context.subscriptions.push(vscode.window.registerTreeDataProvider("techmind.sessions", sessionsProvider), vscode.window.registerTreeDataProvider("techmind.workflows", workflowsProvider), vscode.window.registerTreeDataProvider("techmind.tools", toolsProvider), vscode.window.registerTreeDataProvider("techmind.models", modelsProvider));
+    // Ensure a first session exists so the panel always has somewhere to write.
+    sessionManager.ensureActive().then(() => sessionsProvider.refresh());
     const getEnabledModels = () => modelsProvider.getEnabledSet();
     // ── Command: Open Agent Panel (RIGHT side) ──
     context.subscriptions.push(vscode.commands.registerCommand("techmind.openAgent", () => {
         agentPanel_1.AgentPanel.createOrShow(context.extensionUri, getEnabledModels);
+    }));
+    // ── Command: New Session ──
+    context.subscriptions.push(vscode.commands.registerCommand("techmind.newSession", async () => {
+        await sessionManager.create();
+        sessionsProvider.refresh();
+        const agent = agentPanel_1.AgentPanel.createOrShow(context.extensionUri, getEnabledModels);
+        await agent.loadActiveSession();
+    }));
+    // ── Command: Switch to a Session (from the Sessions tree) ──
+    context.subscriptions.push(vscode.commands.registerCommand("techmind.switchSession", async (sessionId) => {
+        if (!sessionId)
+            return;
+        await sessionManager.setActive(sessionId);
+        sessionsProvider.refresh();
+        const agent = agentPanel_1.AgentPanel.createOrShow(context.extensionUri, getEnabledModels);
+        await agent.loadActiveSession();
+    }));
+    // ── Command: Rename a Session ──
+    context.subscriptions.push(vscode.commands.registerCommand("techmind.renameSession", async (item) => {
+        if (!item || !item.meta)
+            return;
+        const title = await vscode.window.showInputBox({
+            prompt: "Rename session",
+            value: item.meta.title,
+        });
+        if (title && title.trim()) {
+            await sessionManager.rename(item.meta.id, title.trim());
+            sessionsProvider.refresh();
+        }
+    }));
+    // ── Command: Delete a Session ──
+    context.subscriptions.push(vscode.commands.registerCommand("techmind.deleteSession", async (item) => {
+        if (!item || !item.meta)
+            return;
+        const pick = await vscode.window.showWarningMessage(`Delete session "${item.meta.title}"? This cannot be undone.`, { modal: true }, "Delete");
+        if (pick !== "Delete")
+            return;
+        const wasActive = sessionManager.getActiveId() === item.meta.id;
+        await sessionManager.delete(item.meta.id);
+        await sessionManager.ensureActive();
+        sessionsProvider.refresh();
+        if (wasActive && agentPanel_1.AgentPanel.currentPanel) {
+            await agentPanel_1.AgentPanel.currentPanel.loadActiveSession();
+        }
     }));
     // ── Command: Run a predefined workflow ──
     context.subscriptions.push(vscode.commands.registerCommand("techmind.runWorkflow", (workflow) => {

@@ -28,6 +28,11 @@
     "views": {
       "techmind-sidebar": [
         {
+          "id": "techmind.sessions",
+          "name": "Sessions",
+          "icon": "media/icon.svg"
+        },
+        {
           "id": "techmind.workflows",
           "name": "Workflows",
           "icon": "media/icon.svg"
@@ -45,6 +50,25 @@
       ]
     },
     "commands": [
+      {
+        "command": "techmind.newSession",
+        "title": "TechMind: New Session",
+        "icon": "$(add)"
+      },
+      {
+        "command": "techmind.switchSession",
+        "title": "TechMind: Open Session"
+      },
+      {
+        "command": "techmind.renameSession",
+        "title": "TechMind: Rename Session",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "techmind.deleteSession",
+        "title": "TechMind: Delete Session",
+        "icon": "$(trash)"
+      },
       {
         "command": "techmind.openAgent",
         "title": "TechMind: Open Agent Panel",
@@ -90,6 +114,23 @@
           "command": "techmind.checkEndpoints",
           "when": "view == techmind.models",
           "group": "navigation"
+        },
+        {
+          "command": "techmind.newSession",
+          "when": "view == techmind.sessions",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "techmind.renameSession",
+          "when": "view == techmind.sessions && viewItem == sessionItem",
+          "group": "inline"
+        },
+        {
+          "command": "techmind.deleteSession",
+          "when": "view == techmind.sessions && viewItem == sessionItem",
+          "group": "inline"
         }
       ]
     },
