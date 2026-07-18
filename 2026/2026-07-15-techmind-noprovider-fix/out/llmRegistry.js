@@ -1,52 +1,15 @@
 "use strict";
 /**
  * llmRegistry.ts
- * Model registry, task-based auto-routing, and direct HTTPS calls to
- * the airgapped vLLM gateway. Mirrors the logic from TechMind Studio (Streamlit).
- * NO external/cloud calls are ever made — only the configured internal base URL.
+ * Model registry and task-based auto-routing.
+ *
+ * Transport lives in llmClient.ts; this file is data + routing only, so the two
+ * can evolve independently and neither has to import the other's concerns.
  */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SYSTEM_CONTEXT = exports.LLM_REGISTRY = void 0;
 exports.autoRoute = autoRoute;
 exports.getLLM = getLLM;
-exports.callLLM = callLLM;
-exports.callWithFallback = callWithFallback;
-exports.checkHealth = checkHealth;
-const https = __importStar(require("https"));
-const vscode = __importStar(require("vscode"));
 exports.LLM_REGISTRY = [
     {
         name: "Llama-3.3-70B",
@@ -169,123 +132,5 @@ function autoRoute(query) {
 }
 function getLLM(name) {
     return exports.LLM_REGISTRY.find((m) => m.name === name);
-}
-function getBaseUrl() {
-    return vscode.workspace.getConfiguration("techmind").get("baseUrl") ||
-        "https://chatbotapi.analytics.idb.gunk.in";
-}
-function getTimeout() {
-    return vscode.workspace.getConfiguration("techmind").get("timeoutMs") || 120000;
-}
-/** Direct HTTPS POST to the internal vLLM gateway. No proxy, no external host. */
-function callLLM(llmName, messages, overrideTokens) {
-    return new Promise((resolve) => {
-        const spec = getLLM(llmName);
-        if (!spec) {
-            resolve({ text: "", llmUsed: llmName, elapsedMs: 0, error: `Unknown model: ${llmName}` });
-            return;
-        }
-        const baseUrl = getBaseUrl();
-        const fullUrl = new URL(`${baseUrl}${spec.path}/chat/completions`);
-        const payload = JSON.stringify({
-            model: spec.model,
-            messages,
-            max_tokens: overrideTokens || spec.maxTokens,
-            temperature: spec.temperature,
-        });
-        const options = {
-            hostname: fullUrl.hostname,
-            port: fullUrl.port || 443,
-            path: fullUrl.pathname,
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Content-Length": Buffer.byteLength(payload),
-                Authorization: "Bearer EMPTY",
-            },
-            timeout: getTimeout(),
-            // Internal CA chains on airgapped networks are often self-signed;
-            // if your gateway uses a trusted internal CA, set this to true
-            // and configure NODE_EXTRA_CA_CERTS instead.
-            rejectUnauthorized: false,
-        };
-        const t0 = Date.now();
-        const req = https.request(options, (res) => {
-            let raw = "";
-            res.on("data", (chunk) => (raw += chunk));
-            res.on("end", () => {
-                const elapsedMs = Date.now() - t0;
-                if (res.statusCode !== 200) {
-                    resolve({ text: "", llmUsed: llmName, elapsedMs, error: `HTTP ${res.statusCode}: ${raw.slice(0, 300)}` });
-                    return;
-                }
-                try {
-                    const data = JSON.parse(raw);
-                    const text = data.choices?.[0]?.message?.content ?? "";
-                    resolve({ text, llmUsed: llmName, elapsedMs, error: "" });
-                }
-                catch (e) {
-                    resolve({ text: "", llmUsed: llmName, elapsedMs, error: `Parse error: ${e.message}` });
-                }
-            });
-        });
-        req.on("timeout", () => {
-            req.destroy();
-            resolve({ text: "", llmUsed: llmName, elapsedMs: Date.now() - t0, error: "Request timed out" });
-        });
-        req.on("error", (e) => {
-            resolve({ text: "", llmUsed: llmName, elapsedMs: Date.now() - t0, error: e.message });
-        });
-        req.write(payload);
-        req.end();
-    });
-}
-/** Tries primary model, falls back through the enabled registry in priority order. */
-async function callWithFallback(primaryLlm, messages, enabledModels) {
-    if (enabledModels.has(primaryLlm)) {
-        const result = await callLLM(primaryLlm, messages);
-        if (!result.error)
-            return result;
-    }
-    const sorted = [...exports.LLM_REGISTRY].sort((a, b) => a.priority - b.priority);
-    for (const spec of sorted) {
-        if (spec.name === primaryLlm || !enabledModels.has(spec.name))
-            continue;
-        const result = await callLLM(spec.name, messages);
-        if (!result.error) {
-            result.error = `(fell back from ${primaryLlm})`;
-            return result;
-        }
-    }
-    return { text: "", llmUsed: primaryLlm, elapsedMs: 0, error: `All enabled models failed, starting from ${primaryLlm}` };
-}
-/** Quick health check against a model's endpoint. */
-function checkHealth(llmName) {
-    return new Promise((resolve) => {
-        const spec = getLLM(llmName);
-        if (!spec) {
-            resolve({ ok: false, detail: "Unknown model" });
-            return;
-        }
-        const baseUrl = getBaseUrl();
-        const fullUrl = new URL(`${baseUrl}${spec.path}/models`);
-        const options = {
-            hostname: fullUrl.hostname,
-            port: fullUrl.port || 443,
-            path: fullUrl.pathname,
-            method: "GET",
-            timeout: 8000,
-            rejectUnauthorized: false,
-        };
-        const req = https.request(options, (res) => {
-            resolve({ ok: res.statusCode === 200, detail: `HTTP ${res.statusCode}` });
-        });
-        req.on("timeout", () => {
-            req.destroy();
-            resolve({ ok: false, detail: "Timeout" });
-        });
-        req.on("error", (e) => resolve({ ok: false, detail: e.message }));
-        req.end();
-    });
 }
 //# sourceMappingURL=llmRegistry.js.map

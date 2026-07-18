@@ -9,7 +9,10 @@ import * as vscode from "vscode";
 import { WorkflowsProvider, ToolsProvider, ModelsProvider } from "./sidebarProviders";
 import { AgentPanel } from "./agentPanel";
 import { Workflow } from "./workflows";
-import { LLM_REGISTRY, checkHealth } from "./llmRegistry";
+import { LLM_REGISTRY } from "./llmRegistry";
+import { checkHealth } from "./llmClient";
+import { getBaseUrl } from "./config";
+import { runDiagnostics } from "./diagnostics";
 
 export function activate(context: vscode.ExtensionContext) {
   // ── Models state (enabled/disabled) ──
@@ -100,11 +103,23 @@ export function activate(context: vscode.ExtensionContext) {
           const results: string[] = [];
           for (const spec of LLM_REGISTRY) {
             const r = await checkHealth(spec.name);
-            results.push(`${r.ok ? "✅" : "❌"} ${spec.name} — ${r.detail}`);
+            const ctx = r.maxModelLen ? ` · context ${r.maxModelLen}` : "";
+            results.push(`${r.ok ? "✅" : "❌"} ${spec.name} — ${r.detail}${ctx}`);
           }
           vscode.window.showInformationMessage(results.join("\n"), { modal: true });
         }
       );
+    })
+  );
+
+  // ── Command: Full gateway diagnostics (streaming, real context window, cancel) ──
+  context.subscriptions.push(
+    vscode.commands.registerCommand("techmind.diagnostics", async () => {
+      try {
+        await runDiagnostics(getBaseUrl());
+      } catch (e: any) {
+        vscode.window.showErrorMessage(`TechMind diagnostics failed: ${e?.message ?? e}`);
+      }
     })
   );
 }

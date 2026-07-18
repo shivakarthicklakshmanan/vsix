@@ -45,6 +45,9 @@ const vscode = __importStar(require("vscode"));
 const sidebarProviders_1 = require("./sidebarProviders");
 const agentPanel_1 = require("./agentPanel");
 const llmRegistry_1 = require("./llmRegistry");
+const llmClient_1 = require("./llmClient");
+const config_1 = require("./config");
+const diagnostics_1 = require("./diagnostics");
 function activate(context) {
     // ── Models state (enabled/disabled) ──
     const initiallyEnabled = new Set(llmRegistry_1.LLM_REGISTRY.map((m) => m.name));
@@ -104,11 +107,21 @@ function activate(context) {
         vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Checking TechMind endpoints..." }, async () => {
             const results = [];
             for (const spec of llmRegistry_1.LLM_REGISTRY) {
-                const r = await (0, llmRegistry_1.checkHealth)(spec.name);
-                results.push(`${r.ok ? "✅" : "❌"} ${spec.name} — ${r.detail}`);
+                const r = await (0, llmClient_1.checkHealth)(spec.name);
+                const ctx = r.maxModelLen ? ` · context ${r.maxModelLen}` : "";
+                results.push(`${r.ok ? "✅" : "❌"} ${spec.name} — ${r.detail}${ctx}`);
             }
             vscode.window.showInformationMessage(results.join("\n"), { modal: true });
         });
+    }));
+    // ── Command: Full gateway diagnostics (streaming, real context window, cancel) ──
+    context.subscriptions.push(vscode.commands.registerCommand("techmind.diagnostics", async () => {
+        try {
+            await (0, diagnostics_1.runDiagnostics)((0, config_1.getBaseUrl)());
+        }
+        catch (e) {
+            vscode.window.showErrorMessage(`TechMind diagnostics failed: ${e?.message ?? e}`);
+        }
     }));
 }
 function deactivate() { }

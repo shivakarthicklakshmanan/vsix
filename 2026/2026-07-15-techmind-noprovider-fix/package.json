@@ -75,6 +75,10 @@
       {
         "command": "techmind.checkEndpoints",
         "title": "TechMind: Check Endpoint Health"
+      },
+      {
+        "command": "techmind.diagnostics",
+        "title": "TechMind: Run Gateway Diagnostics"
       }
     ],
     "menus": {
@@ -110,12 +114,29 @@
           "type": "boolean",
           "default": true,
           "description": "Ask one clarifying question before producing complex outputs."
+        },
+        "techmind.streaming": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ],
+          "default": "auto",
+          "enumDescriptions": [
+            "Try streaming; fall back to a single buffered request if the gateway or a proxy refuses it.",
+            "Always stream. Surfaces the error instead of silently falling back — useful for diagnosing a proxy.",
+            "Never stream. Responses appear all at once, as they did before."
+          ],
+          "description": "Whether to request token streaming (SSE) from the gateway."
         }
       }
     }
   },
   "scripts": {
     "compile": "tsc -p ./",
+    "test": "node test/markdown.test.js && node test/llmClient.test.js",
+    "pretest": "tsc -p ./",
     "package": "node make-vsix.js",
     "build": "node build.js"
   },

@@ -43,6 +43,7 @@ exports.AgentPanel = void 0;
 const vscode = __importStar(require("vscode"));
 const path = __importStar(require("path"));
 const llmRegistry_1 = require("./llmRegistry");
+const llmClient_1 = require("./llmClient");
 class AgentPanel {
     static createOrShow(extensionUri, getEnabledModels) {
         const column = vscode.ViewColumn.Two;
@@ -53,6 +54,9 @@ class AgentPanel {
         const panel = vscode.window.createWebviewPanel("techmindAgent", "TechMind Agent", column, {
             enableScripts: true,
             retainContextWhenHidden: true,
+            // Scripts and styles are loaded as files now, so the webview needs
+            // explicit permission to read them.
+            localResourceRoots: [vscode.Uri.joinPath(extensionUri, "media")],
         });
         AgentPanel.currentPanel = new AgentPanel(panel, extensionUri, getEnabledModels);
         return AgentPanel.currentPanel;
@@ -61,7 +65,9 @@ class AgentPanel {
         this.disposables = [];
         this.history = [];
         this.attachedFiles = [];
-        this.attachedImages = []; // { name, base64, mimeType }
+        this.attachedImages = [];
+        /** Last prompt as the user typed it, so Retry can re-run it verbatim. */
+        this.lastUserText = "";
         this.panel = panel;
         this.extensionUri = extensionUri;
         this.getEnabledModels = getEnabledModels;
@@ -88,6 +94,15 @@ class AgentPanel {
                 case "openFilePicker":
                     await this.attachFileFromPicker();
                     break;
+                case "stopGeneration":
+                    this.stopGeneration();
+                    break;
+                case "retryLast":
+                    await this.retryLast();
+                    break;
+                case "copyText":
+                    await vscode.env.clipboard.writeText(msg.text ?? "");
+                    break;
             }
         }, null, this.disposables);
         this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
@@ -107,62 +122,59 @@ class AgentPanel {
             canSelectMany: true,
             openLabel: "Attach to TechMind",
             filters: {
-                "All Supported": ["txt","py","sql","md","json","yaml","yml","log","sh","csv","js","ts","java","xml","html","css","png","jpg","jpeg","gif","webp","bmp","pdf"],
-                "Text Files": ["txt","py","sql","md","json","yaml","yml","log","sh","csv","js","ts","java","xml","html","css"],
-                "Images": ["png","jpg","jpeg","gif","webp","bmp"],
+                "All Supported": ["txt", "py", "sql", "md", "json", "yaml", "yml", "log", "sh", "csv", "js", "ts", "java", "xml", "html", "css", "png", "jpg", "jpeg", "gif", "webp", "bmp", "pdf"],
+                "Text Files": ["txt", "py", "sql", "md", "json", "yaml", "yml", "log", "sh", "csv", "js", "ts", "java", "xml", "html", "css"],
+                "Images": ["png", "jpg", "jpeg", "gif", "webp", "bmp"],
                 "PDF": ["pdf"],
             },
         });
-        if (!uris || uris.length === 0) return;
-
-        const TEXT_EXTS = new Set(["txt","py","sql","md","json","yaml","yml","log","sh","csv","js","ts","java","xml","html","css","env","cfg","ini","toml"]);
-        const IMAGE_EXTS = new Set(["png","jpg","jpeg","gif","webp","bmp"]);
-        const MIME_MAP = { png:"image/png", jpg:"image/jpeg", jpeg:"image/jpeg", gif:"image/gif", webp:"image/webp", bmp:"image/bmp" };
-
+        if (!uris || uris.length === 0)
+            return;
+        const TEXT_EXTS = new Set(["txt", "py", "sql", "md", "json", "yaml", "yml", "log", "sh", "csv", "js", "ts", "java", "xml", "html", "css", "env", "cfg", "ini", "toml"]);
+        const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp"]);
+        const MIME_MAP = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", bmp: "image/bmp" };
         for (const uri of uris) {
             const fileName = path.basename(uri.fsPath);
             const ext = fileName.split(".").pop()?.toLowerCase() || "";
-
             try {
                 const rawBytes = await vscode.workspace.fs.readFile(uri);
-
                 if (TEXT_EXTS.has(ext)) {
                     // Plain text — inject as context string (existing behaviour)
                     const content = Buffer.from(rawBytes).toString("utf8").slice(0, 15000);
-                    this.attachedFiles = this.attachedFiles.filter(f => f.name !== fileName);
+                    this.attachedFiles = this.attachedFiles.filter((f) => f.name !== fileName);
                     this.attachedFiles.push({ name: fileName, content });
                     vscode.window.showInformationMessage(`TechMind: attached ${fileName} as text context`);
-
-                } else if (IMAGE_EXTS.has(ext)) {
+                }
+                else if (IMAGE_EXTS.has(ext)) {
                     // Image — store as base64 for multimodal message to Llama
                     const b64 = Buffer.from(rawBytes).toString("base64");
-                    this.attachedImages = this.attachedImages.filter(f => f.name !== fileName);
+                    this.attachedImages = this.attachedImages.filter((f) => f.name !== fileName);
                     this.attachedImages.push({ name: fileName, base64: b64, mimeType: MIME_MAP[ext] || "image/png" });
                     vscode.window.showInformationMessage(`TechMind: attached ${fileName} as image (multimodal)`);
-
-                } else if (ext === "pdf") {
+                }
+                else if (ext === "pdf") {
                     // PDF — extract raw bytes as base64; Llama-3.3-70B can read PDFs as documents
                     const b64 = Buffer.from(rawBytes).toString("base64");
-                    this.attachedImages = this.attachedImages.filter(f => f.name !== fileName);
+                    this.attachedImages = this.attachedImages.filter((f) => f.name !== fileName);
                     this.attachedImages.push({ name: fileName, base64: b64, mimeType: "application/pdf" });
                     vscode.window.showInformationMessage(`TechMind: attached ${fileName} as PDF`);
-
-                } else {
+                }
+                else {
                     // Unknown — try reading as text anyway
                     const content = Buffer.from(rawBytes).toString("utf8").slice(0, 15000);
-                    this.attachedFiles = this.attachedFiles.filter(f => f.name !== fileName);
+                    this.attachedFiles = this.attachedFiles.filter((f) => f.name !== fileName);
                     this.attachedFiles.push({ name: fileName, content });
                     vscode.window.showInformationMessage(`TechMind: attached ${fileName} as text`);
                 }
-            } catch (e) {
+            }
+            catch (e) {
                 vscode.window.showWarningMessage(`TechMind: could not read ${fileName}: ${e}`);
             }
         }
-
         // Notify webview to update the attached bar
         const allNames = [
-            ...this.attachedFiles.map(f => f.name),
-            ...this.attachedImages.map(f => `${f.name} (${f.mimeType.split("/")[0]})`),
+            ...this.attachedFiles.map((f) => f.name),
+            ...this.attachedImages.map((f) => `${f.name} (${f.mimeType.split("/")[0]})`),
         ];
         this.postToWebview({ type: "filesUpdated", files: allNames });
     }
@@ -190,9 +202,13 @@ class AgentPanel {
         return parts.join("\n");
     }
     async handleUserMessage(userText) {
+        // One generation at a time — a second send while streaming would interleave
+        // tokens from two turns into the same bubble.
+        if (this.abortController)
+            return;
+        this.lastUserText = userText;
         const guidedMode = vscode.workspace.getConfiguration("techmind").get("guidedMode");
         const route = (0, llmRegistry_1.autoRoute)(userText);
-        this.postToWebview({ type: "routing", llm: route.llmName, taskType: route.taskType, icon: route.icon });
         let systemMsg = llmRegistry_1.SYSTEM_CONTEXT;
         const fileCtx = this.buildFileContext();
         if (fileCtx)
@@ -214,28 +230,17 @@ class AgentPanel {
             parts.push({ type: "text", text: userContent });
             // Add each image/PDF as base64
             for (const img of this.attachedImages) {
-                if (img.mimeType === "application/pdf") {
-                    // Llama handles PDFs as a document block (vLLM OpenAI-compat)
-                    parts.push({
-                        type: "image_url",
-                        image_url: {
-                            url: `data:${img.mimeType};base64,${img.base64}`,
-                            detail: "high",
-                        },
-                    });
-                } else {
-                    // Standard image_url block for images
-                    parts.push({
-                        type: "image_url",
-                        image_url: {
-                            url: `data:${img.mimeType};base64,${img.base64}`,
-                            detail: "high",
-                        },
-                    });
-                }
+                parts.push({
+                    type: "image_url",
+                    image_url: {
+                        url: `data:${img.mimeType};base64,${img.base64}`,
+                        detail: "high",
+                    },
+                });
             }
             userPayload = parts;
-        } else {
+        }
+        else {
             userPayload = userContent;
         }
         const messages = [
@@ -243,22 +248,67 @@ class AgentPanel {
             ...this.history,
             { role: "user", content: userPayload },
         ];
-        const result = await (0, llmRegistry_1.callWithFallback)(route.llmName, messages, this.getEnabledModels());
-        if (!result.text) {
-            this.postToWebview({ type: "error", text: `All models failed. ${result.error}` });
-            return;
-        }
-        // Store clean turn (without guided-mode wrapper) for memory
-        this.history.push({ role: "user", content: userText });
-        this.history.push({ role: "assistant", content: result.text });
+        const ac = new AbortController();
+        this.abortController = ac;
         this.postToWebview({
-            type: "assistantMessage",
-            text: result.text,
-            llmUsed: result.llmUsed,
+            type: "streamStart",
+            llm: route.llmName,
+            icon: route.icon,
             taskType: `${route.icon} ${route.taskType}`,
-            elapsedMs: result.elapsedMs,
-            note: result.error || "",
         });
+        try {
+            const result = await (0, llmClient_1.callWithFallback)(route.llmName, messages, this.getEnabledModels(), {
+                signal: ac.signal,
+                onToken: (delta) => this.postToWebview({ type: "streamToken", delta }),
+            });
+            // Store the clean turn (without the guided-mode wrapper) as memory.
+            this.history.push({ role: "user", content: userText });
+            this.history.push({ role: "assistant", content: result.text });
+            this.postToWebview({
+                type: "streamEnd",
+                text: result.text,
+                llmUsed: result.llmUsed,
+                taskType: `${route.icon} ${route.taskType}`,
+                elapsedMs: result.elapsedMs,
+                streamed: result.streamed,
+                firstTokenMs: result.firstTokenMs,
+                fellBackFrom: result.fellBackFrom,
+                fallbackReason: result.fallbackReason,
+            });
+        }
+        catch (e) {
+            const err = e;
+            if (err.kind === "aborted") {
+                this.postToWebview({ type: "cancelled" });
+            }
+            else {
+                this.postToWebview({ type: "error", text: err.message || String(e) });
+            }
+        }
+        finally {
+            if (this.abortController === ac)
+                this.abortController = undefined;
+        }
+    }
+    /** Cancels the in-flight generation. The webview keeps whatever streamed so far. */
+    stopGeneration() {
+        this.abortController?.abort();
+    }
+    /**
+     * Re-runs the last prompt. The failed or unsatisfying turn is dropped from
+     * history first so the retry isn't biased by the answer being replaced.
+     */
+    async retryLast() {
+        if (!this.lastUserText || this.abortController)
+            return;
+        const last = this.history[this.history.length - 1];
+        if (last && last.role === "assistant") {
+            this.history.pop();
+            const prevUser = this.history[this.history.length - 1];
+            if (prevUser && prevUser.role === "user")
+                this.history.pop();
+        }
+        await this.handleUserMessage(this.lastUserText);
     }
     async insertIntoActiveEditor(code) {
         const editor = vscode.window.activeTextEditor;
@@ -297,268 +347,60 @@ class AgentPanel {
                 d.dispose();
         }
     }
+    /**
+     * The webview shell. Markup only — styles and behaviour live in
+     * media/webview/ so this file stays readable and the panel can run under a
+     * strict CSP (no inline script, every asset nonce- or source-restricted).
+     */
     getHtml() {
+        const w = this.panel.webview;
+        const asset = (name) => w.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "webview", name));
+        const nonce = getNonce();
+        const csp = [
+            "default-src 'none'",
+            `img-src ${w.cspSource} data:`,
+            `style-src ${w.cspSource}`,
+            `font-src ${w.cspSource}`,
+            `script-src 'nonce-${nonce}'`,
+        ].join("; ");
         return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<style>
-  body {
-    font-family: var(--vscode-font-family);
-    background: var(--vscode-editor-background);
-    color: var(--vscode-editor-foreground);
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-  }
-  #header {
-    padding: 10px 14px;
-    border-bottom: 1px solid var(--vscode-panel-border);
-    font-weight: 600;
-    font-size: 13px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-  #header .sub { font-weight: 400; opacity: 0.7; font-size: 11px; }
-  #attachedBar {
-    padding: 6px 14px;
-    font-size: 11px;
-    opacity: 0.8;
-    border-bottom: 1px solid var(--vscode-panel-border);
-    display: none;
-  }
-  #chat {
-    flex: 1;
-    overflow-y: auto;
-    padding: 10px 14px;
-  }
-  .msg { margin-bottom: 16px; }
-  .role { font-size: 11px; opacity: 0.6; margin-bottom: 3px; }
-  .bubble {
-    white-space: pre-wrap;
-    line-height: 1.45;
-    font-size: 13px;
-  }
-  .bubble code {
-    background: var(--vscode-textCodeBlock-background);
-    padding: 1px 4px;
-    border-radius: 3px;
-    font-family: var(--vscode-editor-font-family);
-  }
-  .bubble pre {
-    background: var(--vscode-textCodeBlock-background);
-    padding: 8px;
-    border-radius: 4px;
-    overflow-x: auto;
-    font-family: var(--vscode-editor-font-family);
-    font-size: 12px;
-  }
-  .meta { font-size: 10px; opacity: 0.55; margin-top: 4px; }
-  .actions { margin-top: 6px; display: flex; gap: 6px; }
-  .actions button {
-    font-size: 11px;
-    padding: 3px 8px;
-    background: var(--vscode-button-secondaryBackground);
-    color: var(--vscode-button-secondaryForeground);
-    border: none;
-    border-radius: 3px;
-    cursor: pointer;
-  }
-  .actions button:hover { background: var(--vscode-button-secondaryHoverBackground); }
-  #routingBanner {
-    font-size: 11px;
-    opacity: 0.7;
-    padding: 4px 14px;
-    display: none;
-  }
-  #inputBar {
-    border-top: 1px solid var(--vscode-panel-border);
-    padding: 10px;
-    display: flex;
-    gap: 6px;
-  }
-  #userInput {
-    flex: 1;
-    resize: none;
-    background: var(--vscode-input-background);
-    color: var(--vscode-input-foreground);
-    border: 1px solid var(--vscode-input-border);
-    border-radius: 4px;
-    padding: 8px;
-    font-family: var(--vscode-font-family);
-    font-size: 13px;
-    min-height: 36px;
-    max-height: 140px;
-  }
-  #sendBtn {
-    background: var(--vscode-button-background);
-    color: var(--vscode-button-foreground);
-    border: none;
-    border-radius: 4px;
-    padding: 0 16px;
-    cursor: pointer;
-    font-size: 13px;
-  }
-  #sendBtn:hover { background: var(--vscode-button-hoverBackground); }
-  .error { color: var(--vscode-errorForeground); }
-  #attachBtn {
-    background: var(--vscode-button-secondaryBackground);
-    color: var(--vscode-button-secondaryForeground);
-    border: none;
-    border-radius: 4px;
-    padding: 0 10px;
-    cursor: pointer;
-    font-size: 16px;
-  }
-  #attachBtn:hover { background: var(--vscode-button-secondaryHoverBackground); }
-</style>
+<meta http-equiv="Content-Security-Policy" content="${csp}">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="${asset("main.css")}">
+<title>TechMind Agent</title>
 </head>
 <body>
   <div id="header">
     <span>TechMind Agent</span>
-    <span class="sub" id="modelSuggestion"></span>
+    <span class="sub" id="suggested"></span>
   </div>
   <div id="attachedBar"></div>
-  <div id="routingBanner"></div>
   <div id="chat"></div>
-  <div id="inputBar">
-    <button id="attachBtn" title="Attach file (text, image, PDF)">📎</button>
-    <textarea id="userInput" placeholder="Ask a technical question, paste an error, or describe what you need..."></textarea>
+  <div id="status">
+    <span id="statusText">Working</span>
+    <button id="stopBtn" title="Stop generating">Stop</button>
+  </div>
+  <div id="inputRow">
+    <button id="attachBtn" title="Attach a file">&#128206;</button>
+    <textarea id="input" rows="1" placeholder="Ask a technical question, paste an error, or describe what you need&#8230;"></textarea>
     <button id="sendBtn">Send</button>
   </div>
-
-<script>
-  const vscode = acquireVsCodeApi();
-  const chat = document.getElementById('chat');
-  const input = document.getElementById('userInput');
-  const sendBtn = document.getElementById('sendBtn');
-  const attachedBar = document.getElementById('attachedBar');
-  const routingBanner = document.getElementById('routingBanner');
-  const modelSuggestion = document.getElementById('modelSuggestion');
-
-  let msgCounter = 0;
-
-  function escapeHtml(s) {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
-
-  function renderMarkdownish(text) {
-    // Minimal: turn \`\`\`lang\\ncode\`\`\` into <pre><code>, leave rest as escaped text
-    const parts = text.split(/\`\`\`(\\w*)\\n([\\s\\S]*?)\`\`\`/g);
-    let html = "";
-    for (let i = 0; i < parts.length; i++) {
-      if (i % 3 === 0) {
-        html += escapeHtml(parts[i]);
-      } else if (i % 3 === 2) {
-        html += "<pre><code>" + escapeHtml(parts[i]) + "</code></pre>";
-      }
-    }
-    return html || escapeHtml(text);
-  }
-
-  function extractCodeBlocks(text) {
-    const re = /\`\`\`(?:python|py)?\\n([\\s\\S]*?)\`\`\`/g;
-    const blocks = [];
-    let m;
-    while ((m = re.exec(text)) !== null) blocks.push(m[1]);
-    return blocks;
-  }
-
-  function addMessage(role, text, meta) {
-    const id = 'msg_' + (msgCounter++);
-    const div = document.createElement('div');
-    div.className = 'msg';
-    const roleLabel = role === 'user' ? 'You' : 'TechMind';
-    let html = '<div class="role">' + roleLabel + '</div>';
-    html += '<div class="bubble">' + renderMarkdownish(text) + '</div>';
-    if (meta) html += '<div class="meta">' + meta + '</div>';
-    div.innerHTML = html;
-
-    if (role === 'assistant') {
-      const blocks = extractCodeBlocks(text);
-      if (blocks.length > 0) {
-        const actions = document.createElement('div');
-        actions.className = 'actions';
-        const insertBtn = document.createElement('button');
-        insertBtn.textContent = '↪ Insert into editor';
-        insertBtn.onclick = () => vscode.postMessage({ type: 'insertIntoEditor', code: blocks.join('\\n\\n') });
-        const saveBtn = document.createElement('button');
-        saveBtn.textContent = '💾 Save as .py';
-        saveBtn.onclick = () => vscode.postMessage({ type: 'saveAsFile', code: blocks.join('\\n\\n'), suggestedName: 'techmind_output.py' });
-        actions.appendChild(insertBtn);
-        actions.appendChild(saveBtn);
-        div.appendChild(actions);
-      }
-    }
-
-    chat.appendChild(div);
-    chat.scrollTop = chat.scrollHeight;
-    return div;
-  }
-
-  function send() {
-    const text = input.value.trim();
-    if (!text) return;
-    addMessage('user', text);
-    input.value = '';
-    routingBanner.style.display = 'block';
-    routingBanner.textContent = 'Routing...';
-    vscode.postMessage({ type: 'userMessage', text });
-  }
-
-  const attachBtn = document.getElementById('attachBtn');
-  attachBtn.onclick = () => vscode.postMessage({ type: 'openFilePicker' });
-
-  sendBtn.onclick = send;
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      send();
-    }
-  });
-
-  window.addEventListener('message', (event) => {
-    const msg = event.data;
-    switch (msg.type) {
-      case 'routing':
-        routingBanner.style.display = 'block';
-        routingBanner.textContent = msg.icon + ' Routing to ' + msg.llm + ' (' + msg.taskType + ')...';
-        break;
-      case 'assistantMessage': {
-        routingBanner.style.display = 'none';
-        let meta = 'Model: ' + msg.llmUsed + ' · ' + msg.taskType + ' · ' + (msg.elapsedMs/1000).toFixed(1) + 's';
-        if (msg.note) meta += ' · ' + msg.note;
-        addMessage('assistant', msg.text, meta);
-        break;
-      }
-      case 'error':
-        routingBanner.style.display = 'none';
-        addMessage('assistant', '❌ ' + msg.text, null);
-        break;
-      case 'prefill':
-        input.value = msg.text;
-        input.focus();
-        break;
-      case 'suggestModel':
-        modelSuggestion.textContent = 'suggested: ' + msg.model;
-        break;
-      case 'filesUpdated':
-        attachedBar.style.display = 'block';
-        attachedBar.textContent = '📎 Attached: ' + msg.files.join(', ');
-        break;
-      case 'contextCleared':
-        attachedBar.style.display = 'none';
-        attachedBar.textContent = '';
-        break;
-    }
-  });
-</script>
+  <script nonce="${nonce}" src="${asset("markdown.js")}"></script>
+  <script nonce="${nonce}" src="${asset("main.js")}"></script>
 </body>
 </html>`;
     }
 }
 exports.AgentPanel = AgentPanel;
+/** Fresh per page load; the CSP only trusts scripts carrying this value. */
+function getNonce() {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let out = "";
+    for (let i = 0; i < 32; i++)
+        out += chars.charAt(Math.floor(Math.random() * chars.length));
+    return out;
+}
 //# sourceMappingURL=agentPanel.js.map

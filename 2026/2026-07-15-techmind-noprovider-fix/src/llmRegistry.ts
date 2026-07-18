@@ -1,12 +1,10 @@
 /**
  * llmRegistry.ts
- * Model registry, task-based auto-routing, and direct HTTPS calls to
- * the airgapped vLLM gateway. Mirrors the logic from TechMind Studio (Streamlit).
- * NO external/cloud calls are ever made — only the configured internal base URL.
+ * Model registry and task-based auto-routing.
+ *
+ * Transport lives in llmClient.ts; this file is data + routing only, so the two
+ * can evolve independently and neither has to import the other's concerns.
  */
-
-import * as https from "https";
-import * as vscode from "vscode";
 
 export interface LLMSpec {
   name: string;
@@ -161,146 +159,9 @@ export function getLLM(name: string): LLMSpec | undefined {
   return LLM_REGISTRY.find((m) => m.name === name);
 }
 
-function getBaseUrl(): string {
-  return vscode.workspace.getConfiguration("techmind").get<string>("baseUrl") ||
-    "https://chatbotapi.analytics.idb.gunk.in";
-}
-
-function getTimeout(): number {
-  return vscode.workspace.getConfiguration("techmind").get<number>("timeoutMs") || 120000;
-}
-
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   // string for plain text turns, or an array of content parts
   // (text + image_url blocks) for multimodal messages to vLLM.
   content: string | any[];
-}
-
-export interface CallResult {
-  text: string;
-  llmUsed: string;
-  elapsedMs: number;
-  error: string;
-}
-
-/** Direct HTTPS POST to the internal vLLM gateway. No proxy, no external host. */
-export function callLLM(llmName: string, messages: ChatMessage[], overrideTokens?: number): Promise<CallResult> {
-  return new Promise((resolve) => {
-    const spec = getLLM(llmName);
-    if (!spec) {
-      resolve({ text: "", llmUsed: llmName, elapsedMs: 0, error: `Unknown model: ${llmName}` });
-      return;
-    }
-
-    const baseUrl = getBaseUrl();
-    const fullUrl = new URL(`${baseUrl}${spec.path}/chat/completions`);
-    const payload = JSON.stringify({
-      model: spec.model,
-      messages,
-      max_tokens: overrideTokens || spec.maxTokens,
-      temperature: spec.temperature,
-    });
-
-    const options: https.RequestOptions = {
-      hostname: fullUrl.hostname,
-      port: fullUrl.port || 443,
-      path: fullUrl.pathname,
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(payload),
-        Authorization: "Bearer EMPTY",
-      },
-      timeout: getTimeout(),
-      // Internal CA chains on airgapped networks are often self-signed;
-      // if your gateway uses a trusted internal CA, set this to true
-      // and configure NODE_EXTRA_CA_CERTS instead.
-      rejectUnauthorized: false,
-    };
-
-    const t0 = Date.now();
-    const req = https.request(options, (res) => {
-      let raw = "";
-      res.on("data", (chunk) => (raw += chunk));
-      res.on("end", () => {
-        const elapsedMs = Date.now() - t0;
-        if (res.statusCode !== 200) {
-          resolve({ text: "", llmUsed: llmName, elapsedMs, error: `HTTP ${res.statusCode}: ${raw.slice(0, 300)}` });
-          return;
-        }
-        try {
-          const data = JSON.parse(raw);
-          const text = data.choices?.[0]?.message?.content ?? "";
-          resolve({ text, llmUsed: llmName, elapsedMs, error: "" });
-        } catch (e: any) {
-          resolve({ text: "", llmUsed: llmName, elapsedMs, error: `Parse error: ${e.message}` });
-        }
-      });
-    });
-
-    req.on("timeout", () => {
-      req.destroy();
-      resolve({ text: "", llmUsed: llmName, elapsedMs: Date.now() - t0, error: "Request timed out" });
-    });
-
-    req.on("error", (e) => {
-      resolve({ text: "", llmUsed: llmName, elapsedMs: Date.now() - t0, error: e.message });
-    });
-
-    req.write(payload);
-    req.end();
-  });
-}
-
-/** Tries primary model, falls back through the enabled registry in priority order. */
-export async function callWithFallback(
-  primaryLlm: string,
-  messages: ChatMessage[],
-  enabledModels: Set<string>
-): Promise<CallResult> {
-  if (enabledModels.has(primaryLlm)) {
-    const result = await callLLM(primaryLlm, messages);
-    if (!result.error) return result;
-  }
-  const sorted = [...LLM_REGISTRY].sort((a, b) => a.priority - b.priority);
-  for (const spec of sorted) {
-    if (spec.name === primaryLlm || !enabledModels.has(spec.name)) continue;
-    const result = await callLLM(spec.name, messages);
-    if (!result.error) {
-      result.error = `(fell back from ${primaryLlm})`;
-      return result;
-    }
-  }
-  return { text: "", llmUsed: primaryLlm, elapsedMs: 0, error: `All enabled models failed, starting from ${primaryLlm}` };
-}
-
-/** Quick health check against a model's endpoint. */
-export function checkHealth(llmName: string): Promise<{ ok: boolean; detail: string }> {
-  return new Promise((resolve) => {
-    const spec = getLLM(llmName);
-    if (!spec) {
-      resolve({ ok: false, detail: "Unknown model" });
-      return;
-    }
-    const baseUrl = getBaseUrl();
-    const fullUrl = new URL(`${baseUrl}${spec.path}/models`);
-    const options: https.RequestOptions = {
-      hostname: fullUrl.hostname,
-      port: fullUrl.port || 443,
-      path: fullUrl.pathname,
-      method: "GET",
-      timeout: 8000,
-      rejectUnauthorized: false,
-    };
-    const req = https.request(options, (res) => {
-      resolve({ ok: res.statusCode === 200, detail: `HTTP ${res.statusCode}` });
-    });
-    req.on("timeout", () => {
-      req.destroy();
-      resolve({ ok: false, detail: "Timeout" });
-    });
-    req.on("error", (e) => resolve({ ok: false, detail: e.message }));
-    req.end();
-  });
 }
