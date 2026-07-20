@@ -46,12 +46,52 @@ console.log("Including files:");
 finalFiles.forEach((f) => console.log("  extension/" + f));
 
 // ── Build [Content_Types].xml ──
+// A .vsix is an OPC package: EVERY file extension inside it must be declared here,
+// or VS Code may reject the package or fail to serve the file. Derived from the
+// files actually shipping rather than hardcoded, so a new asset type (a .css, a
+// font, an image) can't silently break the package the way an undeclared .css did.
+const MIME_BY_EXT = {
+  json: "application/json",
+  js: "application/javascript",
+  css: "text/css",
+  html: "text/html",
+  svg: "image/svg+xml",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  md: "text/markdown",
+  txt: "text/plain",
+  map: "application/json",
+  woff: "font/woff",
+  woff2: "font/woff2",
+  ttf: "font/ttf",
+};
+
+const shippedExts = Array.from(
+  new Set(
+    finalFiles
+      .map((f) => path.extname(f).replace(".", "").toLowerCase())
+      .filter(Boolean)
+      .concat("vsixmanifest")
+  )
+).sort();
+
+const unknownExts = shippedExts.filter((e) => e !== "vsixmanifest" && !MIME_BY_EXT[e]);
+if (unknownExts.length) {
+  console.log(`NOTE: no known MIME type for ${unknownExts.join(", ")}; using application/octet-stream`);
+}
+
+const defaults = shippedExts
+  .map((e) => {
+    const mime = e === "vsixmanifest" ? "text/xml" : MIME_BY_EXT[e] || "application/octet-stream";
+    return `<Default Extension="${e}" ContentType="${mime}"/>`;
+  })
+  .join("\n");
+
 const contentTypesXml = `<?xml version="1.0" encoding="utf-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-<Default Extension="json" ContentType="application/json"/>
-<Default Extension="js" ContentType="application/javascript"/>
-<Default Extension="svg" ContentType="image/svg+xml"/>
-<Default Extension="vsixmanifest" ContentType="text/xml"/>
+${defaults}
 </Types>`;
 
 // ── Build extension.vsixmanifest ──

@@ -113,14 +113,48 @@ def xml_escape(s: str) -> str:
              .replace('"', "&quot;"))
 
 # ── [Content_Types].xml ───────────────────────────────────────────────────────
+# A .vsix is an OPC package: EVERY file extension inside it must have a content
+# type declared here, or VS Code may reject the package or fail to serve the file.
+# The list is derived from the files actually being shipped rather than hardcoded,
+# so adding a new asset type (a .css, a font, an image) can't silently break the
+# package the way an undeclared .css did.
+MIME_BY_EXT = {
+    "json": "application/json",
+    "js":   "application/javascript",
+    "css":  "text/css",
+    "html": "text/html",
+    "svg":  "image/svg+xml",
+    "png":  "image/png",
+    "jpg":  "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif":  "image/gif",
+    "md":   "text/markdown",
+    "txt":  "text/plain",
+    "map":  "application/json",
+    "woff": "font/woff",
+    "woff2": "font/woff2",
+    "ttf":  "font/ttf",
+}
+
+_exts = sorted({f.suffix.lstrip(".").lower() for f in FILES_TO_INCLUDE if f.suffix})
+_exts = sorted(set(_exts) | {"vsixmanifest"})
+
+_unknown = [e for e in _exts if e not in MIME_BY_EXT and e != "vsixmanifest"]
+if _unknown:
+    print(f"NOTE: no known MIME type for {_unknown}; declaring as application/octet-stream")
+
+_defaults = "\n".join(
+    '<Default Extension="{}" ContentType="{}"/>'.format(
+        e, "text/xml" if e == "vsixmanifest" else MIME_BY_EXT.get(e, "application/octet-stream")
+    )
+    for e in _exts
+)
+
 CONTENT_TYPES = """\
 <?xml version="1.0" encoding="utf-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-<Default Extension="json" ContentType="application/json"/>
-<Default Extension="js" ContentType="application/javascript"/>
-<Default Extension="svg" ContentType="image/svg+xml"/>
-<Default Extension="vsixmanifest" ContentType="text/xml"/>
-</Types>"""
+{}
+</Types>""".format(_defaults)
 
 # ── extension.vsixmanifest ────────────────────────────────────────────────────
 VSIX_MANIFEST = f"""\
