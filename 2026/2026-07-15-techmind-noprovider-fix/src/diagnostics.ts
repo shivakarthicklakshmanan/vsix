@@ -15,6 +15,7 @@
 import * as vscode from "vscode";
 import { LLM_REGISTRY, LLMSpec } from "./llmRegistry";
 import { callChat, checkHealth, LlmError } from "./llmClient";
+import { createAbortController } from "./abort";
 
 export interface StreamProbe {
   attempted: boolean;
@@ -138,7 +139,7 @@ async function probeContext(spec: LLMSpec, maxModelLen?: number): Promise<Contex
  * reading; whether the SERVER frees its slot cannot be observed from here.
  */
 async function probeAbort(spec: LLMSpec): Promise<AbortProbe> {
-  const ac = new AbortController();
+  const ac = createAbortController();
   const t0 = Date.now();
   const p = callChat(
     spec.name,

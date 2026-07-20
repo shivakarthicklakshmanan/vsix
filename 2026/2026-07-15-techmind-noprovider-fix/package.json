@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "publisher": "internal-airgapped",
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.61.0"
   },
   "categories": [
     "Other",
@@ -135,14 +135,14 @@
   },
   "scripts": {
     "compile": "tsc -p ./",
-    "test": "node test/markdown.test.js && node test/llmClient.test.js",
+    "test": "node test/markdown.test.js && node test/llmClient.test.js && node test/abort.test.js",
     "pretest": "tsc -p ./",
     "package": "node make-vsix.js",
     "build": "node build.js"
   },
   "devDependencies": {
-    "@types/node": "^20.19.43",
-    "@types/vscode": "^1.85.0",
+    "@types/node": "^14.18.63",
+    "@types/vscode": "^1.61.0",
     "typescript": "^5.9.3"
   }
 }

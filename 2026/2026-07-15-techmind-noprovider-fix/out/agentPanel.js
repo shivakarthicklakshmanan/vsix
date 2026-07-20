@@ -42,8 +42,12 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.AgentPanel = void 0;
 const vscode = __importStar(require("vscode"));
 const path = __importStar(require("path"));
+// Imported rather than used as a global: on Node 14 (VS Code 1.61's runtime) the
+// global exists but isn't declared, so this keeps the build honest across hosts.
+const util_1 = require("util");
 const llmRegistry_1 = require("./llmRegistry");
 const llmClient_1 = require("./llmClient");
+const abort_1 = require("./abort");
 class AgentPanel {
     static createOrShow(extensionUri, getEnabledModels) {
         const column = vscode.ViewColumn.Two;
@@ -248,7 +252,7 @@ class AgentPanel {
             ...this.history,
             { role: "user", content: userPayload },
         ];
-        const ac = new AbortController();
+        const ac = (0, abort_1.createAbortController)();
         this.abortController = ac;
         this.postToWebview({
             type: "streamStart",
@@ -332,7 +336,7 @@ class AgentPanel {
         });
         if (!uri)
             return;
-        const encoder = new TextEncoder();
+        const encoder = new util_1.TextEncoder();
         await vscode.workspace.fs.writeFile(uri, encoder.encode(code));
         const doc = await vscode.workspace.openTextDocument(uri);
         await vscode.window.showTextDocument(doc);

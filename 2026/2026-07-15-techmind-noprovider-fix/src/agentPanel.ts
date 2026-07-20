@@ -7,8 +7,12 @@
 
 import * as vscode from "vscode";
 import * as path from "path";
+// Imported rather than used as a global: on Node 14 (VS Code 1.61's runtime) the
+// global exists but isn't declared, so this keeps the build honest across hosts.
+import { TextEncoder } from "util";
 import { ChatMessage, autoRoute, SYSTEM_CONTEXT } from "./llmRegistry";
 import { callWithFallback, LlmError } from "./llmClient";
+import { createAbortController, TmAbortController } from "./abort";
 
 interface AttachedFile {
   name: string;
@@ -33,7 +37,7 @@ export class AgentPanel {
   private getEnabledModels: () => Set<string>;
 
   /** Non-undefined only while a generation is in flight; drives the Stop button. */
-  private abortController: AbortController | undefined;
+  private abortController: TmAbortController | undefined;
   /** Last prompt as the user typed it, so Retry can re-run it verbatim. */
   private lastUserText = "";
 
@@ -266,7 +270,7 @@ export class AgentPanel {
       { role: "user", content: userPayload },
     ];
 
-    const ac = new AbortController();
+    const ac = createAbortController();
     this.abortController = ac;
 
     this.postToWebview({

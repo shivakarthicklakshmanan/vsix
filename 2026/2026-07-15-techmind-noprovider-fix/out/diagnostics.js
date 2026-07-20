@@ -50,6 +50,7 @@ exports.runDiagnostics = runDiagnostics;
 const vscode = __importStar(require("vscode"));
 const llmRegistry_1 = require("./llmRegistry");
 const llmClient_1 = require("./llmClient");
+const abort_1 = require("./abort");
 /**
  * Streaming verdict. A gateway can answer 200 with `text/event-stream` and still
  * be useless if a proxy buffered the whole body — in that case every token
@@ -134,7 +135,7 @@ async function probeContext(spec, maxModelLen) {
  * reading; whether the SERVER frees its slot cannot be observed from here.
  */
 async function probeAbort(spec) {
-    const ac = new AbortController();
+    const ac = (0, abort_1.createAbortController)();
     const t0 = Date.now();
     const p = (0, llmClient_1.callChat)(spec.name, [{ role: "user", content: "Write a very long essay about databases. At least 2000 words." }], { stream: true, maxTokens: 2000, signal: ac.signal, timeoutMs: 90000 });
     setTimeout(() => ac.abort(), 1500);

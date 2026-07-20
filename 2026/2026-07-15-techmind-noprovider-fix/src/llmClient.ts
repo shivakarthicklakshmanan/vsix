@@ -16,6 +16,7 @@ import * as https from "https";
 import * as http from "http";
 import { LLMSpec, getLLM, LLM_REGISTRY, ChatMessage } from "./llmRegistry";
 import { getBaseUrl, getTimeout, getStreamingMode } from "./config";
+import { TmAbortSignal } from "./abort";
 
 export type LlmErrorKind =
   | "unknown_model"
@@ -55,7 +56,7 @@ export class LlmError extends Error {
 
 export interface CallOptions {
   /** Abort mid-generation. Surfaces as an `aborted` LlmError. */
-  signal?: AbortSignal;
+  signal?: TmAbortSignal;
   /** Called for each token as it arrives. Only fires when the response actually streams. */
   onToken?: (delta: string) => void;
   /** Overrides the model's registry default. */
